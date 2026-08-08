@@ -344,13 +344,27 @@ def compute_moves(markets):
 
 
 def format_alert(market, percent_change, previous_price, current_price):
-    direction = "UP" if percent_change > 0 else "DOWN"
+    is_up = percent_change > 0
+    direction_emoji = "🟢" if is_up else "🔴"
+    direction_word = "UP" if is_up else "DOWN"
+    arrow = "⬆️" if is_up else "⬇️"
+
+    question = market.get("question", "Unknown market")
+    volume = market.get("volume")
+    try:
+        volume_str = f"${float(volume):,.0f}" if volume else "N/A"
+    except (ValueError, TypeError):
+        volume_str = "N/A"
+
     return (
-        f"<b>Momentum Alert</b>\n\n"
-        f"Market: {market.get('question', 'Unknown')}\n"
-        f"Change: {direction} {percent_change:+.2f}%\n"
-        f"Previous price: {previous_price:.3f}\n"
-        f"Current price: {current_price:.3f}"
+        f"{direction_emoji} <b>MOMENTUM ALERT</b> {direction_emoji}\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>{question}</b>\n\n"
+        f"{arrow} <b>{direction_word} {percent_change:+.2f}%</b>\n\n"
+        f"💰 Previous: <code>{previous_price:.3f}</code>\n"
+        f"💵 Current:  <code>{current_price:.3f}</code>\n"
+        f"📈 Volume: {volume_str}\n"
+        f"\n⚠️ Not financial advice."
     )
 
 
