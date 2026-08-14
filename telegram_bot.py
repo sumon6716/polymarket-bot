@@ -2,6 +2,7 @@ import requests
 import time
 import json
 import os
+import sqlite3
 import threading
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -17,6 +18,7 @@ MAX_THRESHOLD = 50.0
 MARKET_LIMIT = 30
 ALERT_COOLDOWN_SECONDS = 600  # don't re-alert the same market within this window
 SUBSCRIBERS_FILE = "subscribers.json"
+SUBSCRIBERS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subscribers.db")
 PORT = int(os.environ.get("PORT", 10000))
 
 CATEGORIES = ["Politics", "Crypto", "Sports", "Pop Culture"]
@@ -61,7 +63,7 @@ def start_health_server():
     server.serve_forever()
 
 
-# ================== SUBSCRIBER STORAGE ==================
+# ================== SUBSCRIBER STORAGE (SQLite) ==================
 def default_user_settings():
     return {
         "threshold": DEFAULT_THRESHOLD,
@@ -71,25 +73,96 @@ def default_user_settings():
     }
 
 
-def load_subscribers():
-    """Returns dict: {chat_id_str: settings_dict}. Migrates old list-format files automatically."""
+def _get_db_connection():
+    conn = sqlite3.connect(SUBSCRIBERS_DB)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS subscribers (
+            chat_id TEXT PRIMARY KEY,
+            threshold REAL,
+            categories TEXT,
+            watchlist TEXT,
+            premium INTEGER
+        )
+    """)
+    return conn
+
+
+def _migrate_json_to_db_if_needed():
+    """One-time migration: if subscribers.json exists and the DB is empty, import it."""
     if not os.path.exists(SUBSCRIBERS_FILE):
-        return {}
+        return
+    conn = _get_db_connection()
+    count = conn.execute("SELECT COUNT(*) FROM subscribers").fetchone()[0]
+    if count > 0:
+        conn.close()
+        return
     try:
         with open(SUBSCRIBERS_FILE, "r") as f:
             data = json.load(f)
     except (json.JSONDecodeError, IOError):
-        return {}
+        conn.close()
+        return
 
     if isinstance(data, list):
         # old format: just a list of chat ids -> migrate
-        return {str(cid): default_user_settings() for cid in data}
-    return data
+        data = {str(cid): default_user_settings() for cid in data}
+
+    for chat_id, settings in data.items():
+        conn.execute(
+            "INSERT OR REPLACE INTO subscribers (chat_id, threshold, categories, watchlist, premium) VALUES (?, ?, ?, ?, ?)",
+            (
+                str(chat_id),
+                settings.get("threshold", DEFAULT_THRESHOLD),
+                json.dumps(settings.get("categories", list(CATEGORIES))),
+                json.dumps(settings.get("watchlist", [])),
+                1 if settings.get("premium", False) else 0,
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+    try:
+        os.rename(SUBSCRIBERS_FILE, SUBSCRIBERS_FILE + ".migrated_bak")
+    except OSError:
+        pass
+    print(f"Migrated {len(data)} subscriber(s) from {SUBSCRIBERS_FILE} to SQLite.")
+
+
+def load_subscribers():
+    """Returns dict: {chat_id_str: settings_dict}, loaded from SQLite."""
+    _migrate_json_to_db_if_needed()
+    conn = _get_db_connection()
+    rows = conn.execute("SELECT chat_id, threshold, categories, watchlist, premium FROM subscribers").fetchall()
+    conn.close()
+
+    subscribers = {}
+    for chat_id, threshold, categories, watchlist, premium in rows:
+        subscribers[chat_id] = {
+            "threshold": threshold,
+            "categories": json.loads(categories),
+            "watchlist": json.loads(watchlist),
+            "premium": bool(premium),
+        }
+    return subscribers
 
 
 def save_subscribers(subscribers):
-    with open(SUBSCRIBERS_FILE, "w") as f:
-        json.dump(subscribers, f, indent=2)
+    """Persists the full subscribers dict to SQLite (mirrors old JSON-file behavior)."""
+    conn = _get_db_connection()
+    conn.execute("DELETE FROM subscribers")
+    for chat_id, settings in subscribers.items():
+        conn.execute(
+            "INSERT INTO subscribers (chat_id, threshold, categories, watchlist, premium) VALUES (?, ?, ?, ?, ?)",
+            (
+                str(chat_id),
+                settings.get("threshold", DEFAULT_THRESHOLD),
+                json.dumps(settings.get("categories", list(CATEGORIES))),
+                json.dumps(settings.get("watchlist", [])),
+                1 if settings.get("premium", False) else 0,
+            ),
+        )
+    conn.commit()
+    conn.close()
 
 
 # ================== TELEGRAM API HELPERS (with retry/backoff) ==================

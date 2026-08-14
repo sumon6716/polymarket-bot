@@ -2,3 +2,4 @@
 subscribers.json
 __pycache__/
 *.pyc
+subscribers.db
