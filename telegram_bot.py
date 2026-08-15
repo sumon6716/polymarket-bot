@@ -25,6 +25,7 @@ SUBSCRIBERS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subsc
 PORT = int(os.environ.get("PORT", 10000))
 
 ADMIN_CHAT_ID = "5504538753"  # only this chat_id can use /broadcast and /stats
+DONATION_ADDRESS = "TGb88HkX5pFq9eGVojYj7qQRJe83eUH9pV"  # USDT (TRC20 / Tron network only)
 
 CATEGORIES = ["Politics", "Crypto", "Sports", "Pop Culture"]
 CATEGORY_KEYWORDS = {
@@ -283,7 +284,8 @@ def handle_message(chat_id, text, subscribers):
             "/status — view your current settings\n"
             "/stop — unsubscribe\n\n"
             "You'll also get 🐋 whale trade alerts and a daily top-movers summary automatically.\n\n"
-            "⚠️ This is not financial advice — it only reports price movement.",
+            "⚠️ This is not financial advice — it only reports price movement.\n\n"
+            "If this bot is useful to you, /donate to support it 🙏",
         )
 
     elif text == "/stop":
@@ -358,6 +360,17 @@ def handle_message(chat_id, text, subscribers):
             f"Categories: {cats}\n"
             f"Watchlist items: {len(s['watchlist'])}\n"
             f"Tier: {'Premium' if s['premium'] else 'Free'}",
+        )
+
+    elif text == "/donate":
+        send_message(
+            chat_id,
+            "<b>🙏 Support this bot</b>\n\n"
+            "If you find these alerts useful, you can send USDT (TRC20 / Tron network only):\n\n"
+            f"<code>{DONATION_ADDRESS}</code>\n\n"
+            "⚠️ Only send USDT on the Tron (TRC20) network to this address — sending any other coin "
+            "or network may result in permanent loss of funds.\n\n"
+            "Thank you for your support!",
         )
 
     elif text == "/stats":
@@ -645,24 +658,4 @@ def run_bot():
                     moves = compute_moves(markets)
                     dispatch_alerts(subscribers, moves)
                     for market, percent_change, _prev, _curr in moves:
-                        daily_summary_state["moves"].append((market.get("question", "Unknown market"), percent_change))
-
-            if now - last_whale_check_time >= WHALE_CHECK_INTERVAL_SECONDS:
-                last_whale_check_time = now
-                check_whale_trades(subscribers)
-
-            check_daily_summary(subscribers)
-
-        except Exception as e:
-            # top-level safety net so one bad cycle never kills the whole bot
-            print(f"Unexpected error in main loop: {e}. Continuing...")
-
-        time.sleep(2)
-
-
-if __name__ == "__main__":
-    threading.Thread(target=start_health_server, daemon=True).start()
-    try:
-        run_bot()
-    except KeyboardInterrupt:
-        print("\nBot stopped. Goodbye!")
+                        daily_summary_state["moves"].append((market.get("question",
