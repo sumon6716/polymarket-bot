@@ -658,4 +658,24 @@ def run_bot():
                     moves = compute_moves(markets)
                     dispatch_alerts(subscribers, moves)
                     for market, percent_change, _prev, _curr in moves:
-                        daily_summary_state["moves"].append((market.get("question",
+                        daily_summary_state["moves"].append((market.get("question", "Unknown market"), percent_change))
+
+            if now - last_whale_check_time >= WHALE_CHECK_INTERVAL_SECONDS:
+                last_whale_check_time = now
+                check_whale_trades(subscribers)
+
+            check_daily_summary(subscribers)
+
+        except Exception as e:
+            # top-level safety net so one bad cycle never kills the whole bot
+            print(f"Unexpected error in main loop: {e}. Continuing...")
+
+        time.sleep(2)
+
+
+if __name__ == "__main__":
+    threading.Thread(target=start_health_server, daemon=True).start()
+    try:
+        run_bot()
+    except KeyboardInterrupt:
+        print("\nBot stopped. Goodbye!")
