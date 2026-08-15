@@ -11,7 +11,10 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 POLYMARKET_API_URL = "https://gamma-api.polymarket.com/markets"
+TRADES_API_URL = "https://data-api.polymarket.com/trades"
 DEFAULT_CHECK_INTERVAL_SECONDS = 30
+WHALE_CHECK_INTERVAL_SECONDS = 60
+WHALE_TRADE_THRESHOLD_USD = 50000
 DEFAULT_THRESHOLD = 1.0
 MIN_THRESHOLD = 0.1
 MAX_THRESHOLD = 50.0
@@ -20,6 +23,8 @@ ALERT_COOLDOWN_SECONDS = 600  # don't re-alert the same market within this windo
 SUBSCRIBERS_FILE = "subscribers.json"
 SUBSCRIBERS_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subscribers.db")
 PORT = int(os.environ.get("PORT", 10000))
+
+ADMIN_CHAT_ID = "5504538753"  # only this chat_id can use /broadcast and /stats
 
 CATEGORIES = ["Politics", "Crypto", "Sports", "Pop Culture"]
 CATEGORY_KEYWORDS = {
@@ -31,6 +36,9 @@ CATEGORY_KEYWORDS = {
 
 previous_prices = {}       # market_id -> last seen price
 last_alert_time = {}       # (chat_id, market_id) -> unix timestamp, for cooldown
+processed_trade_ids = set()  # trade ids already checked for whale alerts
+alert_stats = {"date": None, "count": 0}                 # alerts sent today (for /stats)
+daily_summary_state = {"date": None, "moves": []}         # top movers collected today
 
 def load_env():
     if os.path.exists(".env"):
@@ -217,6 +225,15 @@ def get_updates(offset=None):
     return result.get("result", [])
 
 
+# ================== STATS TRACKING ==================
+def record_alert_sent(n=1):
+    today = datetime.now().strftime("%Y-%m-%d")
+    if alert_stats["date"] != today:
+        alert_stats["date"] = today
+        alert_stats["count"] = 0
+    alert_stats["count"] += n
+
+
 # ================== KEYBOARDS ==================
 def category_keyboard(user_settings):
     rows = []
@@ -265,6 +282,7 @@ def handle_message(chat_id, text, subscribers):
             "/mywatchlist — view your watchlist\n"
             "/status — view your current settings\n"
             "/stop — unsubscribe\n\n"
+            "You'll also get 🐋 whale trade alerts and a daily top-movers summary automatically.\n\n"
             "⚠️ This is not financial advice — it only reports price movement.",
         )
 
@@ -341,6 +359,31 @@ def handle_message(chat_id, text, subscribers):
             f"Watchlist items: {len(s['watchlist'])}\n"
             f"Tier: {'Premium' if s['premium'] else 'Free'}",
         )
+
+    elif text == "/stats":
+        if str(chat_id) != ADMIN_CHAT_ID:
+            send_message(chat_id, "This command is for the bot admin only.")
+            return
+        today = datetime.now().strftime("%Y-%m-%d")
+        alerts_today = alert_stats["count"] if alert_stats["date"] == today else 0
+        send_message(
+            chat_id,
+            f"<b>Bot stats</b>\n"
+            f"Subscribers: {len(subscribers)}\n"
+            f"Alerts sent today: {alerts_today}",
+        )
+
+    elif text.startswith("/broadcast"):
+        if str(chat_id) != ADMIN_CHAT_ID:
+            send_message(chat_id, "This command is for the bot admin only.")
+            return
+        message_text = text[len("/broadcast"):].strip()
+        if not message_text:
+            send_message(chat_id, "Usage: /broadcast Your message here")
+            return
+        broadcast_message(subscribers, f"📢 <b>Announcement</b>\n\n{message_text}")
+        record_alert_sent(len(subscribers))
+        send_message(chat_id, f"Broadcast sent to {len(subscribers)} subscriber(s).")
 
 
 def handle_callback_query(callback_query, subscribers):
@@ -484,6 +527,92 @@ def dispatch_alerts(subscribers, moves):
 
             send_message(chat_id, text, reply_markup=keyboard)
             last_alert_time[cooldown_key] = now
+            record_alert_sent(1)
+
+
+# ================== WHALE TRADE ALERTS ==================
+def get_recent_trades(limit=100):
+    params = {"limit": limit}
+    try:
+        response = requests.get(TRADES_API_URL, params=params, timeout=15)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching trade data: {e}")
+        return []
+
+
+def format_whale_alert(question, outcome, side, usd_value, price):
+    side_word = (side or "").upper() or "TRADE"
+    outcome_text = f" — {outcome}" if outcome else ""
+    return (
+        f"🐋 <b>WHALE ALERT</b> 🐋\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>{question}</b>{outcome_text}\n\n"
+        f"{side_word}\n"
+        f"💵 Size: ${usd_value:,.0f}\n"
+        f"💰 Price: {price:.3f}\n"
+        f"\n⚠️ Not financial advice."
+    )
+
+
+def check_whale_trades(subscribers):
+    if not subscribers:
+        return
+    trades = get_recent_trades()
+    for trade in trades:
+        trade_id = trade.get("transactionHash") or trade.get("id") or trade.get("hash")
+        if not trade_id or trade_id in processed_trade_ids:
+            continue
+        processed_trade_ids.add(trade_id)
+
+        try:
+            size = float(trade.get("size", 0))
+            price = float(trade.get("price", 0))
+        except (TypeError, ValueError):
+            continue
+
+        usd_value = size * price
+        if usd_value < WHALE_TRADE_THRESHOLD_USD:
+            continue
+
+        question = trade.get("title") or trade.get("question") or trade.get("market") or "Unknown market"
+        outcome = trade.get("outcome", "")
+        side = trade.get("side", "")
+
+        text = format_whale_alert(question, outcome, side, usd_value, price)
+        broadcast_message(subscribers, text)
+        record_alert_sent(len(subscribers))
+
+    # keep memory usage bounded over long uptimes
+    if len(processed_trade_ids) > 2000:
+        processed_trade_ids.clear()
+
+
+# ================== DAILY SUMMARY ==================
+def check_daily_summary(subscribers):
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    if daily_summary_state["date"] is None:
+        daily_summary_state["date"] = today
+        return
+
+    if today == daily_summary_state["date"]:
+        return  # still the same day, nothing to send yet
+
+    moves = daily_summary_state["moves"]
+    if moves and subscribers:
+        top = sorted(moves, key=lambda m: abs(m[1]), reverse=True)[:5]
+        lines = []
+        for question, pct in top:
+            arrow = "🟢⬆️" if pct > 0 else "🔴⬇️"
+            lines.append(f"{arrow} {question} ({pct:+.2f}%)")
+        text = "<b>📅 Daily Summary — Top Movers</b>\n\n" + "\n".join(lines)
+        broadcast_message(subscribers, text)
+        record_alert_sent(len(subscribers))
+
+    daily_summary_state["date"] = today
+    daily_summary_state["moves"] = []
 
 
 # ================== MAIN LOOP ==================
@@ -495,6 +624,8 @@ def run_bot():
     subscribers = load_subscribers()
     last_update_id = None
     last_check_time = 0
+    last_whale_check_time = 0
+    daily_summary_state["date"] = datetime.now().strftime("%Y-%m-%d")  # don't fire a summary on first run
 
     print("Telegram bot started.")
     print(f"Current subscriber count: {len(subscribers)}")
@@ -513,6 +644,14 @@ def run_bot():
                 if markets:
                     moves = compute_moves(markets)
                     dispatch_alerts(subscribers, moves)
+                    for market, percent_change, _prev, _curr in moves:
+                        daily_summary_state["moves"].append((market.get("question", "Unknown market"), percent_change))
+
+            if now - last_whale_check_time >= WHALE_CHECK_INTERVAL_SECONDS:
+                last_whale_check_time = now
+                check_whale_trades(subscribers)
+
+            check_daily_summary(subscribers)
 
         except Exception as e:
             # top-level safety net so one bad cycle never kills the whole bot
