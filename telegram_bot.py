@@ -27,6 +27,12 @@ PORT = int(os.environ.get("PORT", 10000))
 ADMIN_CHAT_ID = "5504538753"  # only this chat_id can use /broadcast and /stats
 DONATION_ADDRESS = "TGb88HkX5pFq9eGVojYj7qQRJe83eUH9pV"  # USDT (TRC20 / Tron network only)
 
+# Twitter/X posting (all read from environment variables set in Render, never hardcoded)
+TWITTER_API_KEY = os.environ.get("TWITTER_API_KEY")
+TWITTER_API_SECRET = os.environ.get("TWITTER_API_SECRET")
+TWITTER_ACCESS_TOKEN = os.environ.get("TWITTER_ACCESS_TOKEN")
+TWITTER_ACCESS_TOKEN_SECRET = os.environ.get("TWITTER_ACCESS_TOKEN_SECRET")
+
 CATEGORIES = ["Politics", "Crypto", "Sports", "Pop Culture"]
 CATEGORY_KEYWORDS = {
     "Politics": ["election", "president", "senate", "congress", "governor", "vote", "poll"],
@@ -602,6 +608,65 @@ def check_whale_trades(subscribers):
         processed_trade_ids.clear()
 
 
+# ================== TWITTER / X POSTING ==================
+def _twitter_oauth1_header(method, url, api_key, api_secret, access_token, access_token_secret):
+    """Builds an OAuth 1.0a Authorization header (HMAC-SHA1) without extra dependencies."""
+    import hmac
+    import hashlib
+    import base64
+    import uuid
+    from urllib.parse import quote
+
+    oauth_params = {
+        "oauth_consumer_key": api_key,
+        "oauth_nonce": uuid.uuid4().hex,
+        "oauth_signature_method": "HMAC-SHA1",
+        "oauth_timestamp": str(int(time.time())),
+        "oauth_token": access_token,
+        "oauth_version": "1.0",
+    }
+    param_string = "&".join(
+        f"{quote(k, safe='')}={quote(str(v), safe='')}" for k, v in sorted(oauth_params.items())
+    )
+    base_string = "&".join([method.upper(), quote(url, safe=""), quote(param_string, safe="")])
+    signing_key = f"{quote(api_secret, safe='')}&{quote(access_token_secret, safe='')}"
+    signature = base64.b64encode(
+        hmac.new(signing_key.encode(), base_string.encode(), hashlib.sha1).digest()
+    ).decode()
+    oauth_params["oauth_signature"] = signature
+    return "OAuth " + ", ".join(f'{quote(k, safe="")}="{quote(v, safe="")}"' for k, v in sorted(oauth_params.items()))
+
+
+def post_tweet(text):
+    """Posts a tweet if Twitter credentials are configured; silently skips otherwise."""
+    if not (TWITTER_API_KEY and TWITTER_API_SECRET and TWITTER_ACCESS_TOKEN and TWITTER_ACCESS_TOKEN_SECRET):
+        return
+    url = "https://api.twitter.com/2/tweets"
+    text = text[:280]
+    try:
+        headers = {
+            "Authorization": _twitter_oauth1_header(
+                "POST", url, TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET
+            ),
+            "Content-Type": "application/json",
+        }
+        response = requests.post(url, headers=headers, json={"text": text}, timeout=15)
+        if response.status_code >= 300:
+            print(f"Twitter post failed ({response.status_code}): {response.text}")
+    except requests.exceptions.RequestException as e:
+        print(f"Error posting to Twitter: {e}")
+
+
+def format_daily_summary_tweet(top_moves):
+    lines = ["📊 Polymarket Daily Top Movers"]
+    for question, pct in top_moves[:3]:
+        arrow = "🟢⬆️" if pct > 0 else "🔴⬇️"
+        short_q = question if len(question) <= 60 else question[:57] + "..."
+        lines.append(f"{arrow} {short_q} ({pct:+.1f}%)")
+    lines.append("#Polymarket #PredictionMarkets")
+    return "\n".join(lines)[:280]
+
+
 # ================== DAILY SUMMARY ==================
 def check_daily_summary(subscribers):
     today = datetime.now().strftime("%Y-%m-%d")
@@ -623,6 +688,7 @@ def check_daily_summary(subscribers):
         text = "<b>📅 Daily Summary — Top Movers</b>\n\n" + "\n".join(lines)
         broadcast_message(subscribers, text)
         record_alert_sent(len(subscribers))
+        post_tweet(format_daily_summary_tweet(top))
 
     daily_summary_state["date"] = today
     daily_summary_state["moves"] = []
