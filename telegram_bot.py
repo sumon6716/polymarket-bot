@@ -1,7 +1,9 @@
 import os
 import time
+import threading
 import requests
 import pandas as pd
+from flask import Flask
 from binance.client import Client
 
 # --- Environment variables (Render-এ সেট করা আছে) ---
@@ -16,14 +18,24 @@ INTERVAL = Client.KLINE_INTERVAL_15MINUTE
 RSI_PERIOD = 14
 RSI_OVERSOLD = 30
 RSI_OVERBOUGHT = 70
-CHECK_INTERVAL_SECONDS = 300  # প্রতি ৫ মিনিটে চেক করবে
-TRADE_QUANTITY = 0.001  # BTC পরিমাণ (টেস্টনেট, আসল টাকা না)
+CHECK_INTERVAL_SECONDS = 300
+TRADE_QUANTITY = 0.001
 
 # --- Binance Testnet ক্লায়েন্ট ---
-# ক্লায়েন্ট তৈরির সময় যাতে mainnet-এ ping না করে, তাই ping বন্ধ করে দেওয়া হলো
 Client.ping = lambda self: None
 client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
 client.API_URL = 'https://testnet.binance.vision/api'
+
+# --- Render-এর জন্য ছোট্ট ওয়েব সার্ভার (পোর্ট খোলা রাখার জন্য) ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -79,7 +91,7 @@ def check_market():
         except Exception as e:
             send_telegram(f"⚠️ SELL অর্ডার ব্যর্থ: {e}")
 
-if __name__ == "__main__":
+def run_bot():
     send_telegram("🤖 বট চালু হয়েছে! RSI স্ট্র্যাটেজি মনিটর করছি...")
     while True:
         try:
@@ -88,3 +100,9 @@ if __name__ == "__main__":
             print("Error:", e)
             send_telegram(f"⚠️ এরর হয়েছে: {e}")
         time.sleep(CHECK_INTERVAL_SECONDS)
+
+if __name__ == "__main__":
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    run_web_server()
