@@ -1,1 +1,5 @@
+python-binance==1.0.19
+pandas
+numpy
+scikit-learn
 requests
