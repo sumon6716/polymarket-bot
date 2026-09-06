@@ -17,7 +17,7 @@ RSI_OVERBOUGHT = 70
 CHECK_INTERVAL_SECONDS = 300
 TRADE_QUANTITY = 0.001
 
-KLINES_URL = "https://api.binance.com/api/v3/klines"
+KLINES_URL = "https://testnet.binance.vision/api/v3/klines"
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
