@@ -19,6 +19,7 @@ RSI_OVERBOUGHT = 70
 CHECK_INTERVAL_SECONDS = 300  # প্রতি ৫ মিনিটে চেক করবে
 TRADE_QUANTITY = 0.001  # BTC পরিমাণ (টেস্টনেট, আসল টাকা না)
 
+# --- Binance Testnet ক্লায়েন্ট ---
 client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
 client.API_URL = 'https://testnet.binance.vision/api'
 
