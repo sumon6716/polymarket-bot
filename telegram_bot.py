@@ -1,41 +1,23 @@
 import os
 import time
-import threading
 import requests
 import pandas as pd
-from flask import Flask
-from binance.client import Client
 
-# --- Environment variables (Render-এ সেট করা আছে) ---
+# --- Environment variables ---
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.environ.get("BINANCE_API_SECRET")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# --- সেটিংস ---
 SYMBOL = "BTCUSDT"
-INTERVAL = Client.KLINE_INTERVAL_15MINUTE
+INTERVAL = "15m"
 RSI_PERIOD = 14
 RSI_OVERSOLD = 30
 RSI_OVERBOUGHT = 70
 CHECK_INTERVAL_SECONDS = 300
 TRADE_QUANTITY = 0.001
 
-# --- Binance Testnet ক্লায়েন্ট ---
-Client.ping = lambda self: None
-client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
-client.API_URL = 'https://testnet.binance.vision/api'
-
-# --- Render-এর জন্য ছোট্ট ওয়েব সার্ভার (পোর্ট খোলা রাখার জন্য) ---
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Bot is running!"
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+KLINES_URL = "https://api.binance.com/api/v3/klines"
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -46,8 +28,11 @@ def send_telegram(message):
         print("Telegram send error:", e)
 
 def get_klines():
-    klines = client.get_klines(symbol=SYMBOL, interval=INTERVAL, limit=100)
-    df = pd.DataFrame(klines, columns=[
+    params = {"symbol": SYMBOL, "interval": INTERVAL, "limit": 100}
+    resp = requests.get(KLINES_URL, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    df = pd.DataFrame(data, columns=[
         "open_time", "open", "high", "low", "close", "volume",
         "close_time", "quote_asset_volume", "num_trades",
         "taker_buy_base", "taker_buy_quote", "ignore"
@@ -67,6 +52,15 @@ def calculate_rsi(df, period=RSI_PERIOD):
 
 position_open = False
 
+def try_place_order(side):
+    try:
+        from binance.client import Client
+        client = Client(BINANCE_API_KEY, BINANCE_API_SECRET, testnet=True)
+        client.create_order(symbol=SYMBOL, side=side, type="MARKET", quantity=TRADE_QUANTITY)
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
 def check_market():
     global position_open
     df = get_klines()
@@ -76,22 +70,22 @@ def check_market():
     print(f"Price: {latest_price} | RSI: {latest_rsi:.2f}")
 
     if latest_rsi < RSI_OVERSOLD and not position_open:
-        try:
-            client.create_order(symbol=SYMBOL, side="BUY", type="MARKET", quantity=TRADE_QUANTITY)
-            position_open = True
-            send_telegram(f"🟢 BUY সিগন্যাল\nSymbol: {SYMBOL}\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}")
-        except Exception as e:
-            send_telegram(f"⚠️ BUY অর্ডার ব্যর্থ: {e}")
+        ok, err = try_place_order("BUY")
+        position_open = True
+        if ok:
+            send_telegram(f"🟢 BUY সিগন্যাল ও অর্ডার সফল\nSymbol: {SYMBOL}\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}")
+        else:
+            send_telegram(f"🟢 BUY সিগন্যাল (অর্ডার ব্যর্থ, শুধু সিগন্যাল)\nSymbol: {SYMBOL}\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}\nকারণ: {err}")
 
     elif latest_rsi > RSI_OVERBOUGHT and position_open:
-        try:
-            client.create_order(symbol=SYMBOL, side="SELL", type="MARKET", quantity=TRADE_QUANTITY)
-            position_open = False
-            send_telegram(f"🔴 SELL সিগন্যাল\nSymbol: {SYMBOL}\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}")
-        except Exception as e:
-            send_telegram(f"⚠️ SELL অর্ডার ব্যর্থ: {e}")
+        ok, err = try_place_order("SELL")
+        position_open = False
+        if ok:
+            send_telegram(f"🔴 SELL সিগন্যাল ও অর্ডার সফল\nSymbol: {SYMBOL}\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}")
+        else:
+            send_telegram(f"🔴 SELL সিগন্যাল (অর্ডার ব্যর্থ, শুধু সিগন্যাল)\nSymbol: {SYMBOL}\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}\nকারণ: {err}")
 
-def run_bot():
+if __name__ == "__main__":
     send_telegram("🤖 বট চালু হয়েছে! RSI স্ট্র্যাটেজি মনিটর করছি...")
     while True:
         try:
@@ -100,9 +94,3 @@ def run_bot():
             print("Error:", e)
             send_telegram(f"⚠️ এরর হয়েছে: {e}")
         time.sleep(CHECK_INTERVAL_SECONDS)
-
-if __name__ == "__main__":
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    run_web_server()
