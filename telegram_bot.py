@@ -96,9 +96,9 @@ def bot_loop():
     while True:
         try:
             check_market()
-               except Exception as e:
+        except Exception as e:
             print("Error:", e)
-        time.sleep(CHECK_INTERVAL_SECONDS) 
+        time.sleep(CHECK_INTERVAL_SECONDS)
 
 if __name__ == "__main__":
     t = threading.Thread(target=bot_loop, daemon=True)
