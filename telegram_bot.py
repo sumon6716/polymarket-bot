@@ -9,15 +9,14 @@ BINANCE_API_SECRET = os.environ.get("BINANCE_API_SECRET")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-SYMBOL = "BTCUSDT"
-INTERVAL = "15m"
 RSI_PERIOD = 14
 RSI_OVERSOLD = 30
 RSI_OVERBOUGHT = 70
 CHECK_INTERVAL_SECONDS = 300
 TRADE_QUANTITY = 0.001
+SYMBOL = "BTCUSDT"
 
-KLINES_URL = "https://testnet.binance.vision/api/v3/klines"
+COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -28,15 +27,11 @@ def send_telegram(message):
         print("Telegram send error:", e)
 
 def get_klines():
-    params = {"symbol": SYMBOL, "interval": INTERVAL, "limit": 100}
-    resp = requests.get(KLINES_URL, params=params, timeout=10)
+    params = {"vs_currency": "usd", "days": "1"}
+    resp = requests.get(COINGECKO_URL, params=params, timeout=10)
     resp.raise_for_status()
     data = resp.json()
-    df = pd.DataFrame(data, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "quote_asset_volume", "num_trades",
-        "taker_buy_base", "taker_buy_quote", "ignore"
-    ])
+    df = pd.DataFrame(data, columns=["time", "open", "high", "low", "close"])
     df["close"] = df["close"].astype(float)
     return df
 
@@ -73,20 +68,20 @@ def check_market():
         ok, err = try_place_order("BUY")
         position_open = True
         if ok:
-            send_telegram(f"🟢 BUY সিগন্যাল ও অর্ডার সফল\nSymbol: {SYMBOL}\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}")
+            send_telegram(f"🟢 BUY সিগন্যাল ও অর্ডার সফল\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}")
         else:
-            send_telegram(f"🟢 BUY সিগন্যাল (অর্ডার ব্যর্থ, শুধু সিগন্যাল)\nSymbol: {SYMBOL}\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}\nকারণ: {err}")
+            send_telegram(f"🟢 BUY সিগন্যাল (শুধু সিগন্যাল, অর্ডার ব্যর্থ)\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}")
 
     elif latest_rsi > RSI_OVERBOUGHT and position_open:
         ok, err = try_place_order("SELL")
         position_open = False
         if ok:
-            send_telegram(f"🔴 SELL সিগন্যাল ও অর্ডার সফল\nSymbol: {SYMBOL}\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}")
+            send_telegram(f"🔴 SELL সিগন্যাল ও অর্ডার সফল\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}")
         else:
-            send_telegram(f"🔴 SELL সিগন্যাল (অর্ডার ব্যর্থ, শুধু সিগন্যাল)\nSymbol: {SYMBOL}\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}\nকারণ: {err}")
+            send_telegram(f"🔴 SELL সিগন্যাল (শুধু সিগন্যাল, অর্ডার ব্যর্থ)\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}")
 
 if __name__ == "__main__":
-    send_telegram("🤖 বট চালু হয়েছে! RSI স্ট্র্যাটেজি মনিটর করছি...")
+    send_telegram("🤖 বট চালু হয়েছে! RSI স্ট্র্যাটেজি মনিটর করছি (CoinGecko ডেটা)...")
     while True:
         try:
             check_market()
