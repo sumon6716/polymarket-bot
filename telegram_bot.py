@@ -13,7 +13,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
 RSI_OVERSOLD = 30
 RSI_OVERBOUGHT = 70
-CHECK_INTERVAL_SECONDS = 300
+CHECK_INTERVAL_SECONDS = 900
 TRADE_QUANTITY = 0.001
 SYMBOL = "BTCUSDT"
 
@@ -96,10 +96,9 @@ def bot_loop():
     while True:
         try:
             check_market()
-        except Exception as e:
+               except Exception as e:
             print("Error:", e)
-            send_telegram(f"⚠️ এরর হয়েছে: {e}")
-        time.sleep(CHECK_INTERVAL_SECONDS)
+        time.sleep(CHECK_INTERVAL_SECONDS) 
 
 if __name__ == "__main__":
     t = threading.Thread(target=bot_loop, daemon=True)
