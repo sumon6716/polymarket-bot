@@ -1,9 +1,10 @@
 import os
 import time
+import threading
 import requests
 import pandas as pd
+from flask import Flask
 
-# --- Environment variables ---
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.environ.get("BINANCE_API_SECRET")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -17,6 +18,16 @@ TRADE_QUANTITY = 0.001
 SYMBOL = "BTCUSDT"
 
 COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is running"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -80,7 +91,7 @@ def check_market():
         else:
             send_telegram(f"🔴 SELL সিগন্যাল (শুধু সিগন্যাল, অর্ডার ব্যর্থ)\nPrice: {latest_price}\nRSI: {latest_rsi:.2f}")
 
-if __name__ == "__main__":
+def bot_loop():
     send_telegram("🤖 বট চালু হয়েছে! RSI স্ট্র্যাটেজি মনিটর করছি (CoinGecko ডেটা)...")
     while True:
         try:
@@ -89,3 +100,8 @@ if __name__ == "__main__":
             print("Error:", e)
             send_telegram(f"⚠️ এরর হয়েছে: {e}")
         time.sleep(CHECK_INTERVAL_SECONDS)
+
+if __name__ == "__main__":
+    t = threading.Thread(target=bot_loop, daemon=True)
+    t.start()
+    run_web()
